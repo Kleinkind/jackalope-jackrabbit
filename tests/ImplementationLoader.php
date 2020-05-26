@@ -1,7 +1,5 @@
 <?php
 
-require_once __DIR__.'/../../vendor/phpcr/phpcr-api-tests/inc/AbstractLoader.php';
-
 /**
  * Implementation loader for jackalope-jackrabbit
  */
@@ -52,6 +50,7 @@ class ImplementationLoader extends \PHPCR\Test\AbstractLoader
         }
 
         $this->unsupportedCases = array(
+            'Versioning\\SimpleVersionTest'
         );
         if (! $this->multiWorkspaceSupported) {
             $this->unsupportedCases[] = 'Writing\\CloneMethodsTest';
@@ -61,6 +60,8 @@ class ImplementationLoader extends \PHPCR\Test\AbstractLoader
             'Reading\\SessionReadMethodsTest::testImpersonate', //TODO: Check if that's implemented in newer jackrabbit versions.
             'Reading\\SessionNamespaceRemappingTest::testSetNamespacePrefix',
             'Reading\\NodeReadMethodsTest::testGetSharedSetUnreferenced', // TODO: should this be moved to 14_ShareableNodes?
+            'Reading\\BinaryReadMethodsTest::testReadEmptyBinaryMultivalue', // bug in jackrabbit import: 0 values loses type
+            'Reading\\BinaryReadMethodsTest::testReadSingleBinaryMultivalue', // bug in jackrabbit import: 1 value ignores multivalue
 
             'Query\\QueryManagerTest::testGetQuery',
             'Query\\QueryManagerTest::testGetQueryInvalid',
@@ -153,8 +154,6 @@ class ImplementationLoader extends \PHPCR\Test\AbstractLoader
 
     public function getFixtureLoader()
     {
-        require_once 'JackrabbitFixtureLoader.php';
-
-        return new JackrabbitFixtureLoader(__DIR__.'/../../vendor/phpcr/phpcr-api-tests/fixtures/', (isset($GLOBALS['jackrabbit.jar']) ? $GLOBALS['jackrabbit.jar'] : null));
+        return new JackrabbitFixtureLoader(__DIR__.'/../vendor/phpcr/phpcr-api-tests/fixtures/', (isset($GLOBALS['jackrabbit.jar']) ? $GLOBALS['jackrabbit.jar'] : null));
     }
 }

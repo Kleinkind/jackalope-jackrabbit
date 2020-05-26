@@ -3,9 +3,9 @@
 namespace Jackalope\Transport\Jackrabbit;
 
 use DOMDocument;
-
 use PHPCR\CredentialsInterface;
 use PHPCR\SimpleCredentials;
+use PHPCR\Lock\LockException;
 use PHPCR\RepositoryException;
 use PHPCR\LoginException;
 use PHPCR\NoSuchWorkspaceException;
@@ -14,7 +14,6 @@ use PHPCR\PathNotFoundException;
 use PHPCR\ReferentialIntegrityException;
 use PHPCR\NodeType\ConstraintViolationException;
 use PHPCR\NodeType\NoSuchNodeTypeException;
-
 use Jackalope\FactoryInterface;
 
 /**
@@ -28,6 +27,7 @@ use Jackalope\FactoryInterface;
  * @author Roland Schilter <roland.schilter@liip.ch>
  * @author Jordi Boggiano <j.boggiano@seld.be>
  * @author Lukas Kahwe Smith <smith@pooteeweet.org>
+ * @author Markus Schmucker <markus.sr@gmx.net>
  */
 class Request
 {
@@ -138,6 +138,12 @@ class Request
      */
     const UPDATE = 'UPDATE';
 
+    /**
+     * Identifier of the 'LABEL' http request method.
+     * @var string
+     */
+    const LABEL = 'LABEL';
+
     /** @var string     Possible argument for {@link setDepth()} */
     const INFINITY = 'infinity';
 
@@ -205,6 +211,19 @@ class Request
     protected static $versionChecked = false;
 
     /**
+     * Whether we are in error handling mode to prevent infinite recursion
+     * @var bool
+     */
+    protected $errorHandlingMode = false;
+
+    /**
+     * Global curl-options used in this request.
+     *
+     * @var array
+     */
+    private $curlOptions = array();
+
+    /**
      * Initiaties the NodeTypes request object.
      *
      * @param FactoryInterface $factory Ignored for now, as this class does not create objects
@@ -220,6 +239,26 @@ class Request
         $this->curl = $curl;
         $this->setMethod($method);
         $this->setUri($uri);
+    }
+
+    /**
+     * Force curl to use HTTP version 1.0
+     *
+     * @deprecated use addCurlOptions([CURLOPT_HTTP_VERSION => CURL_HTTP_VERSION_1_0]) instead
+     */
+    public function forceHttpVersion10()
+    {
+        $this->addCurlOptions(array(CURLOPT_HTTP_VERSION => CURL_HTTP_VERSION_1_0));
+    }
+
+    /**
+     * Add curl-options for this request.
+     *
+     * @param array $options
+     */
+    public function addCurlOptions(array $options)
+    {
+        $this->curlOptions += $options;
     }
 
     /**
@@ -281,11 +320,7 @@ class Request
      */
     public function setUri($uri)
     {
-        if (!is_array($uri)) {
-            $this->uri = array($uri => $uri);
-        } else {
-            $this->uri = $uri;
-        }
+        $this->uri = (array) $uri;
     }
 
     /**
@@ -345,6 +380,19 @@ class Request
 
         if ($this->lockToken) {
             $headers[] = 'Lock-Token: <'.$this->lockToken.'>';
+        }
+
+        if ($this->method == self::POST) {
+            /*
+               Jackrabbit's CSRF protection affects any write request that could come from an HTML form
+               The simplest possible fix probably is to include a Referer header field (referencing the server itself)
+               see https://github.com/jackalope/jackalope-jackrabbit/issues/138
+            */
+            $headers[] = 'Referer: '.$this->client->getWorkspaceUri();
+        }
+
+        foreach ($this->curlOptions as $option => $optionValue) {
+            $curl->setopt($option, $optionValue);
         }
 
         $curl->setopt(CURLOPT_RETURNTRANSFER, true);
@@ -465,18 +513,34 @@ class Request
             $headers[] = 'Lock-Token: <'.$this->lockToken.'>';
         }
 
+        if ($this->method == self::POST) {
+            /*
+               Jackrabbit's CSRF protection affects any write request that could come from an HTML form
+               The simplest possible fix probably is to include a Referer header field (referencing the server itself)
+               see https://github.com/jackalope/jackalope-jackrabbit/issues/138
+            */
+            $headers[] = 'Referer: '.$this->client->getWorkspaceUri();
+        }
+
+        foreach ($this->curlOptions as $option => $optionValue) {
+            $curl->setopt($option, $optionValue);
+        }
+
         $curl->setopt(CURLOPT_RETURNTRANSFER, true);
         $curl->setopt(CURLOPT_CUSTOMREQUEST, $this->method);
         $curl->setopt(CURLOPT_URL, reset($this->uri));
         $curl->setopt(CURLOPT_HTTPHEADER, $headers);
         $curl->setopt(CURLOPT_POSTFIELDS, $this->body);
+
         // uncomment next line to get verbose information from CURL
         $curl->setopt(CURLOPT_VERBOSE, 1);
+
         if ($getCurlObject) {
             $curl->parseResponseHeaders();
         }
 
         $response = $curl->exec();
+
         $curl->setResponse($response);
 
         $httpCode = $curl->getinfo(CURLINFO_HTTP_CODE);
@@ -527,6 +591,12 @@ class Request
             case CURLE_COULDNT_CONNECT:
                 $info = $curl->getinfo();
                 throw new NoSuchWorkspaceException($curl->error() . ' "' . $info['url'] . '"');
+            case CURLE_RECV_ERROR:
+                throw new RepositoryException(sprintf(
+                    'CURLE_RECV_ERROR (errno 56) encountered. This has been known to happen intermittently with ' .
+                    'some versions of libcurl (see https://github.com/jackalope/jackalope-jackrabbit/issues/89). ' .
+                    'You can use the "jackalope.jackrabbit_force_http_version_10" option to force HTTP 1.0 as a workaround'
+                ));
         }
 
         // use XML error response if it's there
@@ -561,7 +631,9 @@ class Request
                         // try to generically "guess" the right exception class name
                         $class = substr($errClass, strlen('javax.jcr.'));
                         $class = explode('.', $class);
-                        array_walk($class, function(&$ns) { $ns = ucfirst(str_replace('nodetype', 'NodeType', $ns)); });
+                        array_walk($class, function (&$ns) {
+                            $ns = ucfirst(str_replace('nodetype', 'NodeType', $ns));
+                        });
                         $class = '\\PHPCR\\'.implode('\\', $class);
 
                         if (class_exists($class)) {
@@ -580,13 +652,32 @@ class Request
         if (405 == $httpCode) {
             throw new HTTPErrorException("HTTP 405 Method Not Allowed: {$this->method} \n" . $this->getShortErrorString(), 405);
         }
+        if (412 == $httpCode) {
+            throw new LockException("Unable to lock the non-lockable node '".reset($this->uri)."\n" . $this->getShortErrorString());
+        }
         if ($httpCode >= 500) {
-            throw new RepositoryException("HTTP $httpCode Error from backend on: {$this->method} \n" . $this->getLongErrorString($curl,$response));
+            $msg = "HTTP $httpCode Error from backend on: {$this->method} \n" . $this->getLongErrorString($curl, $response);
+            try {
+                $workspaceUri = array($this->client->getWorkSpaceUri());
+                if (!$this->errorHandlingMode
+                    && ($workspaceUri !== $this->uri || self::GET !== $this->method)
+                ) {
+                    $this->errorHandlingMode = true;
+                    $this->setUri($workspaceUri);
+                    $this->setMethod(self::GET);
+                    $this->executeDom();
+                }
+            } catch (PathNotFoundException $e) {
+                $msg = "Error likely caused by incorrect server URL configuration '".reset($this->uri)."' resulted in:\n$msg";
+            }
+
+            $this->errorHandlingMode = false;
+            throw new RepositoryException($msg);
         }
 
         $curlError = $curl->error();
 
-        $msg = "Unexpected error: \nCURL Error: $curlError \nResponse (HTTP $httpCode): {$this->method} \n" . $this->getLongErrorString($curl,$response);
+        $msg = "Unexpected error: \nCURL Error: $curlError \nResponse (HTTP $httpCode): {$this->method} \n" . $this->getLongErrorString($curl, $response);
         throw new RepositoryException($msg);
     }
 
@@ -618,10 +709,10 @@ class Request
     protected function getLongErrorString($curl, $response)
     {
         $string = $this->getShortErrorString();
-        $string .= "--curl getinfo: --\n" . var_export($curl->getinfo(),true) . "\n" ;
+        $string .= "--curl getinfo: --\n" . var_export($curl->getinfo(), true) . "\n" ;
         $string .= "--request body (size: " . strlen($this->body) . " bytes): --\n";
         if (strlen($this->body) > 2000) {
-            $string .= substr($this->body,0,2000);
+            $string .= substr($this->body, 0, 2000);
             $string .= "\n (truncated)\n";
         } else {
             $string .= $this->body . "\n";
@@ -675,7 +766,7 @@ class Request
         foreach ($responses as $key => $response) {
             $json[$key] = json_decode($response);
             if (null === $json[$key] && 'null' !== strtolower($response)) {
-                $uri = reset($this->uri); // FIXME was $this->uri[$key]. at which point did we lose the right key?
+                $uri = reset($this->uri);
                 throw new RepositoryException("Not a valid json object: \nRequest: {$this->method} $uri \nResponse: \n$response");
             }
         }

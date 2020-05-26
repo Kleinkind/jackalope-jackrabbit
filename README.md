@@ -1,4 +1,8 @@
-# Jackalope [![Build Status](https://secure.travis-ci.org/jackalope/jackalope-jackrabbit.png?branch=master)](http://travis-ci.org/jackalope/jackalope-jackrabbit)
+# Jackalope Jackrabbit
+
+[![Build Status](https://secure.travis-ci.org/jackalope/jackalope-jackrabbit.png?branch=master)](http://travis-ci.org/jackalope/jackalope-jackrabbit)
+[![Latest Stable Version](https://poser.pugx.org/jackalope/jackalope-jackrabbit/version.png)](https://packagist.org/packages/jackalope/jackalope-jackrabbit)
+[![Total Downloads](https://poser.pugx.org/jackalope/jackalope-jackrabbit/d/total.png)](https://packagist.org/packages/jackalope/jackalope-jackrabbit)
 
 Jackalope is a powerful implementation of the PHP Content Repository API ([PHPCR](http://phpcr.github.io)).
 
@@ -18,6 +22,7 @@ This code is dual licensed under the MIT license and the Apache License Version
 
 * php >= 5.3
 * libxml version >= 2.7.0 (due to a bug in libxml [http://bugs.php.net/bug.php?id=36501](http://bugs.php.net/bug.php?id=36501))
+* libcurl (if you get ``Problem (2) in the Chunked-Encoded data`` with version 7.35, try updating your curl version)
 * phpunit >= 3.6 (if you want to run the tests)
 * [composer](http://getcomposer.org/)
 
@@ -143,7 +148,7 @@ $post->setProperty("jcr:description", "This is the first post on my blog! Do you
 $session->save();
 ```
 
-See [PHPCR Tutorial](https://github.com/phpcr/phpcr-docs/blob/master/tutorial/Tutorial.md)
+See [PHPCR Tutorial](http://phpcr.readthedocs.org/en/latest/book/index.html)
 for a more detailed tutorial on how to use the PHPCR API.
 
 
@@ -152,7 +157,7 @@ for a more detailed tutorial on how to use the PHPCR API.
 Jackalope supports the PHPCR standard query language SQL2 as well as the Query
 Object Model (QOM) to build queries programmatically. We recommend using the
 QOM or the QueryBuilder mentioned in the
-[PHPCR Tutorial](https://github.com/phpcr/phpcr-docs/blob/master/tutorial/Tutorial.md).
+[PHPCR Tutorial](http://phpcr.readthedocs.org/en/latest/book/index.html).
 They are built to use the best possible query language depending on the
 capabilities of the backend. A later switching to another PHPCR implementation
 shouldn't cause any issues then.

@@ -1,21 +1,29 @@
 language: php
+# we seem to need the old trusty dist otherwise communication with jackrabbit fails
+dist: trusty
 
 php:
-  - 5.3
-  - 5.4
-  - 5.5
-  - hhvm
+  - 7.2
+  - 7.3
+  - 7.4
+
+sudo: false
+
+cache:
+  directories:
+    - vendor
+    - $HOME/.composer/cache
+
+matrix:
+  include:
+    - php: 7.2
+      env: COMPOSER_OPTIONS=--prefer-lowest --prefer-stable
 
 before_script:
-  - composer update
+  - composer update --prefer-dist ${COMPOSER_OPTIONS}
   - ./bin/jackrabbit.sh
 
-script: phpunit
+script: vendor/bin/phpunit
 
 notifications:
   irc: "irc.freenode.org#jackalope"
-
-matrix:
-  allow_failures:
-    - php: hhvm
-# hhvm will fail until libxml support is added https://github.com/facebook/hhvm/issues/1194

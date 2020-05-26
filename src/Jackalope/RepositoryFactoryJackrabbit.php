@@ -2,6 +2,7 @@
 
 namespace Jackalope;
 
+use PHPCR\ConfigurationException;
 use PHPCR\RepositoryFactoryInterface;
 
 /**
@@ -42,6 +43,8 @@ class RepositoryFactoryJackrabbit implements RepositoryFactoryInterface
         'jackalope.disable_stream_wrapper' => 'boolean: if set and not empty, stream wrapper is disabled, otherwise the stream wrapper is enabled and streams are only fetched when reading from for the first time. If your code always uses all binary properties it reads, you can disable this for a small performance gain.',
         'jackalope.logger' => 'Psr\Log\LoggerInterface: Use the LoggingClient to wrap the default transport Client',
         Session::OPTION_AUTO_LASTMODIFIED => 'boolean: Whether to automatically update nodes having mix:lastModified. Defaults to true.',
+        'jackalope.jackrabbit_force_http_version_10' => 'boolean: Force HTTP version 1.0, this can in solving problems with curl such as https://github.com/jackalope/jackalope-jackrabbit/issues/89',
+        'jackalope.jackrabbit_curl_options' => 'array: Additional global curl-options',
     );
 
     /**
@@ -58,17 +61,17 @@ class RepositoryFactoryJackrabbit implements RepositoryFactoryInterface
     public function getRepository(array $parameters = null)
     {
         if (null === $parameters) {
-            return null;
+            throw new ConfigurationException('Jackalope-jackrabbit needs parameters');
         }
 
-        // check if we have all required keys
-        $present = array_intersect_key(self::$required, $parameters);
-        if (count(array_diff_key(self::$required, $present))) {
-            return null;
+        // check if we have all required parameters
+        if (count(array_diff_key(self::$required, $parameters))) {
+            throw new ConfigurationException('A required parameter is missing: ' . implode(', ', array_keys(array_diff_key(self::$required, $parameters))));
         }
-        $defined = array_intersect_key(array_merge(self::$required, self::$optional), $parameters);
-        if (count(array_diff_key($defined, $parameters))) {
-            return null;
+
+        // check if we have any unknown parameters
+        if (count(array_diff_key($parameters, self::$required, self::$optional))) {
+            throw new ConfigurationException('Additional unknown parameters found: ' . implode(', ', array_keys(array_diff_key($parameters, self::$required, self::$optional))));
         }
 
         if (isset($parameters['jackalope.factory'])) {
@@ -94,7 +97,21 @@ class RepositoryFactoryJackrabbit implements RepositoryFactoryInterface
             $transport->setCheckLoginOnServer($parameters['jackalope.check_login_on_server']);
         }
         if (isset($parameters['jackalope.logger'])) {
-            $transport = $factory->get('Transport\Jackrabbit\LoggingClient', array($transport, $parameters['jackalope.logger']));
+            $transport = $factory->get(
+                'Transport\Jackrabbit\LoggingClient',
+                array($transport, $parameters['jackalope.logger'])
+            );
+        }
+
+        $curlOptions = array_key_exists('jackalope.jackrabbit_curl_options', $parameters) ?
+            $parameters['jackalope.jackrabbit_curl_options'] : array();
+
+        if (isset($parameters['jackalope.jackrabbit_force_http_version_10'])) {
+            $curlOptions[CURLOPT_HTTP_VERSION] = true;
+        }
+
+        if (count($curlOptions)) {
+            $transport->addCurlOptions($curlOptions);
         }
 
         $options['stream_wrapper'] = empty($parameters['jackalope.disable_stream_wrapper']);

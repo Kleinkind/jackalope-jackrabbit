@@ -4,7 +4,6 @@ namespace Jackalope\Transport\Jackrabbit;
 
 use Jackalope\FactoryInterface;
 use Jackalope\Transport\AbstractReadWriteLoggingWrapper;
-
 use Jackalope\Transport\QueryInterface as QueryTransport;
 use Jackalope\Transport\PermissionInterface;
 use Jackalope\Transport\VersioningInterface;
@@ -12,11 +11,9 @@ use Jackalope\Transport\NodeTypeCndManagementInterface;
 use Jackalope\Transport\LockingInterface;
 use Jackalope\Transport\ObservationInterface;
 use Jackalope\Transport\WorkspaceManagementInterface;
-
 use Jackalope\Query\Query;
 use PHPCR\Observation\EventFilterInterface;
 use PHPCR\SessionInterface;
-
 use Jackalope\Transport\Logging\LoggerInterface;
 
 /**
@@ -27,7 +24,7 @@ use Jackalope\Transport\Logging\LoggerInterface;
  *
  * @author Lukas Kahwe Smith <smith@pooteeweet.org>
  */
-class LoggingClient extends AbstractReadWriteLoggingWrapper implements QueryTransport, PermissionInterface, VersioningInterface, NodeTypeCndManagementInterface, LockingInterface, ObservationInterface, WorkspaceManagementInterface
+class LoggingClient extends AbstractReadWriteLoggingWrapper implements JackrabbitClientInterface
 {
     /**
      * @var Client
@@ -86,6 +83,22 @@ class LoggingClient extends AbstractReadWriteLoggingWrapper implements QueryTran
     }
 
     // VersioningInterface //
+
+    /**
+     * @inheritDoc
+     */
+    public function addVersionLabel($versionPath, $label, $moveLabel)
+    {
+        $this->transport->addVersionLabel($versionPath, $label, $moveLabel);
+    }
+
+    /**
+     * @inheritDoc
+     */
+    public function removeVersionLabel($versionPath, $label)
+    {
+        $this->transport->removeVersionLabel($versionPath, $label);
+    }
 
     /**
      * {@inheritDoc}
@@ -242,5 +255,29 @@ class LoggingClient extends AbstractReadWriteLoggingWrapper implements QueryTran
     public function deleteWorkspace($name)
     {
         $this->transport->deleteWorkspace($name);
+    }
+
+    /**
+     * {@inheritDoc}
+     */
+    public function forceHttpVersion10($forceHttpVersion10 = true)
+    {
+        $this->transport->forceHttpVersion10($forceHttpVersion10);
+    }
+
+    /**
+     * {@inheritDoc}
+     */
+    public function addCurlOptions(array $options)
+    {
+        return $this->transport->addCurlOptions($options);
+    }
+
+    /**
+     * {@inheritDoc}
+     */
+    public function getWorkspaceUri()
+    {
+        return $this->transport->getWorkspaceUri();
     }
 }

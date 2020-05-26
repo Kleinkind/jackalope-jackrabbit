@@ -4,9 +4,9 @@ namespace Jackalope\Transport\Jackrabbit;
 
 use DOMDocument;
 use DOMElement;
+use DOMXPath;
 use LogicException;
 use InvalidArgumentException;
-
 use PHPCR\CredentialsInterface;
 use PHPCR\ItemExistsException;
 use PHPCR\Query\InvalidQueryException;
@@ -21,9 +21,7 @@ use PHPCR\PathNotFoundException;
 use PHPCR\LoginException;
 use PHPCR\Query\QueryInterface;
 use PHPCR\Observation\EventFilterInterface;
-
 use PHPCR\Util\PathHelper;
-
 use Jackalope\Transport\BaseTransport;
 use Jackalope\Transport\QueryInterface as QueryTransport;
 use Jackalope\Transport\PermissionInterface;
@@ -42,6 +40,7 @@ use Jackalope\Lock\Lock;
 use Jackalope\FactoryInterface;
 use PHPCR\Util\ValueConverter;
 use PHPCR\ValueFormatException;
+use PHPCR\Version\LabelExistsVersionException;
 
 /**
  * Connection to one Jackrabbit server.
@@ -65,8 +64,9 @@ use PHPCR\ValueFormatException;
  * @author Uwe Jäger <uwej711@googlemail.com>
  * @author Lukas Kahwe Smith <smith@pooteeweet.org>
  * @author Daniel Barsotti <daniel.barsotti@liip.ch>
+ * @author Markus Schmucker <markus.sr@gmx.net>
  */
-class Client extends BaseTransport implements QueryTransport, PermissionInterface, WritingInterface, VersioningInterface, NodeTypeCndManagementInterface, LockingInterface, ObservationInterface, WorkspaceManagementInterface
+class Client extends BaseTransport implements JackrabbitClientInterface
 {
     /**
      * minimal version needed for the backend server
@@ -166,16 +166,14 @@ class Client extends BaseTransport implements QueryTransport, PermissionInterfac
     protected $curl = null;
 
     /**
-     *  A list of additional HTTP headers to be sent on each request
-     *  @var array[]string
+     * A list of additional HTTP headers to be sent on each request
+     * @var array[]string
      */
-
     protected $defaultHeaders = array();
 
     /**
-     *  @var bool Send Expect: 100-continue header
+     * @var bool Send Expect: 100-continue header
      */
-
     protected $sendExpect = false;
 
     /**
@@ -210,6 +208,13 @@ class Client extends BaseTransport implements QueryTransport, PermissionInterfac
     protected $userData;
 
     /**
+     * Global curl-options used in each request.
+     *
+     * @var array
+     */
+    private $curlOptions = array();
+
+    /**
      * Create a transport pointing to a server url.
      *
      * @param FactoryInterface $factory   the object factory
@@ -237,15 +242,7 @@ class Client extends BaseTransport implements QueryTransport, PermissionInterfac
     }
 
     /**
-     * Add a HTTP header which is sent on each Request.
-     *
-     * This is used for example for a session identifier header to help a proxy
-     * to route all requests from the same session to the same server.
-     *
-     * This is a Jackrabbit Davex specific option called from the repository
-     * factory.
-     *
-     * @param string $header a valid HTTP header to add to each request
+     * {@inheritDoc}
      */
     public function addDefaultHeader($header)
     {
@@ -253,16 +250,31 @@ class Client extends BaseTransport implements QueryTransport, PermissionInterfac
     }
 
     /**
-     * If you want to send the "Expect: 100-continue" header on larger
-     * PUT and POST requests, set this to true.
-     *
-     * This is a Jackrabbit Davex specific option.
-     *
-     * @param bool $send Whether to send the header or not
+     * {@inheritDoc}
      */
     public function sendExpect($send = true)
     {
         $this->sendExpect = $send;
+    }
+
+    /**
+     * {@inheritDoc}
+     */
+    public function forceHttpVersion10($forceHttpVersion10 = true)
+    {
+        if ($forceHttpVersion10) {
+            $this->addCurlOptions(array(CURLOPT_HTTP_VERSION => CURL_HTTP_VERSION_1_0));
+        } else {
+            unset($this->curlOptions[CURLOPT_HTTP_VERSION]);
+        }
+    }
+
+    /**
+     * {@inheritDoc}
+     */
+    public function addCurlOptions(array $options)
+    {
+        return $this->curlOptions += $options;
     }
 
     /**
@@ -272,10 +284,7 @@ class Client extends BaseTransport implements QueryTransport, PermissionInterfac
      */
     protected function getRequest($method, $uri, $addWorkspacePathToUri = true)
     {
-        if (!is_array($uri)) {
-            $uri = array($uri => $uri);
-        }
-
+        $uri = (array) $uri;
         $curl = $this->getCurl();
 
         if ($addWorkspacePathToUri) {
@@ -298,6 +307,8 @@ class Client extends BaseTransport implements QueryTransport, PermissionInterfac
             $request->addHeader("Expect:");
         }
 
+        $request->addCurlOptions($this->curlOptions);
+
         return $request;
     }
 
@@ -312,6 +323,14 @@ class Client extends BaseTransport implements QueryTransport, PermissionInterfac
         }
 
         return $this->curl;
+    }
+
+    /**
+     * {@inheritDoc}
+     */
+    public function getWorkspaceUri()
+    {
+        return $this->workspaceUri;
     }
 
     // CoreInterface //
@@ -380,9 +399,7 @@ class Client extends BaseTransport implements QueryTransport, PermissionInterfac
     }
 
     /**
-     * Configure whether to check if we are logged in before doing a request.
-     *
-     * Will improve error reporting at the cost of some round trips.
+     * {@inheritDoc}
      */
     public function setCheckLoginOnServer($bool)
     {
@@ -519,15 +536,9 @@ class Client extends BaseTransport implements QueryTransport, PermissionInterfac
         try {
             $data = $request->executeJson();
 
-            return $data->nodes;
+            return (array) $data->nodes;
         } catch (PathNotFoundException $e) {
             throw new ItemNotFoundException($e->getMessage(), $e->getCode(), $e);
-        } catch (RepositoryException $e) {
-            if ($e->getMessage() == 'HTTP 403: Prefix must not be empty (org.apache.jackrabbit.spi.commons.conversion.IllegalNameException)') {
-                throw new UnsupportedRepositoryOperationException("Jackalope currently needs a patched jackrabbit for Session->getNodes() to work. Until our patches make it into the official distribution, see https://github.com/jackalope/jackrabbit/blob/2.2-jackalope/README.jackalope.patches.md for details and downloads.");
-            }
-
-            throw $e;
         }
     }
 
@@ -600,7 +611,7 @@ class Client extends BaseTransport implements QueryTransport, PermissionInterfac
             );
         }
 
-        return $this->stripServerRootFromUri(substr(urldecode($fullPath),0,-1));
+        return $this->stripServerRootFromUri(substr(urldecode($fullPath), 0, -1));
     }
 
     /**
@@ -716,7 +727,7 @@ class Client extends BaseTransport implements QueryTransport, PermissionInterfac
 
         foreach ($dom->getElementsByTagNameNS(self::NS_DCR, $identifier) as $node) {
             foreach ($node->getElementsByTagNameNS(self::NS_DAV, 'href') as $ref) {
-                $refpath = str_replace($this->workspaceUriRoot, '',  urldecode($ref->textContent));
+                $refpath = str_replace($this->workspaceUriRoot, '', urldecode($ref->textContent));
                 $refpath = $this->removeTrailingSlash($refpath);
                 if (null === $name || PathHelper::getNodeName($refpath) === $name) {
                     $references[] = $refpath;
@@ -750,6 +761,51 @@ class Client extends BaseTransport implements QueryTransport, PermissionInterfac
     }
 
     // VersioningInterface //
+
+    /**
+     * {@inheritDoc}
+     */
+    public function addVersionLabel($versionPath, $label, $moveLabel)
+    {
+        $versionPath = $this->encodeAndValidatePathForDavex($versionPath);
+
+        $action = 'add';
+        if ($moveLabel) {
+            $action = 'set';
+        }
+
+        $body = '<D:label xmlns:D="DAV:"><D:'.$action.'><D:label-name>'.$label.'</D:label-name></D:'.$action.'></D:label>';
+
+        $request = $this->getRequest(Request::LABEL, $versionPath);
+        $request->setBody($body);
+        try {
+            $request->execute(); // errors are checked in request
+        } catch (HTTPErrorException $e) {
+            if ($e->getCode() == 409) {
+                throw new LabelExistsVersionException($e->getMessage());
+            } else {
+                throw new RepositoryException($e->getMessage());
+            }
+        }
+
+        return;
+    }
+
+    /**
+     * {@inheritDoc}
+     */
+    public function removeVersionLabel($versionPath, $label)
+    {
+        $versionPath = $this->encodeAndValidatePathForDavex($versionPath);
+
+        $body = '<D:label xmlns:D="DAV:"><D:remove><D:label-name>'.$label.'</D:label-name></D:remove></D:label>';
+
+        $request = $this->getRequest(Request::LABEL, $versionPath);
+        $request->setBody($body);
+        $request->execute();
+
+        return;
+    }
 
     /**
      * {@inheritDoc}
@@ -885,9 +941,10 @@ class Client extends BaseTransport implements QueryTransport, PermissionInterfac
 
         $dom = new DOMDocument();
         $dom->loadXML($rawData);
+        $domXpath = new DOMXPath($dom);
 
         $rows = array();
-        foreach ($dom->getElementsByTagName('response') as $row) {
+        foreach ($domXpath->query('D:response') as $row) {
             $columns = array();
             foreach ($row->getElementsByTagName('column') as $column) {
                 $sets = array();
@@ -1095,6 +1152,7 @@ class Client extends BaseTransport implements QueryTransport, PermissionInterfac
             $this->setJsopBody(">" . $operation->srcPath . " : " . $operation->dstPath);
         }
     }
+
     /**
      * {@inheritDoc}
      */
@@ -1253,7 +1311,14 @@ class Client extends BaseTransport implements QueryTransport, PermissionInterfac
                 $this->setJsopBody('^' . $path . ' : ');
             }
         } else {
-            $this->setJsopBody('^' . $path . ' : ' . json_encode($value));
+            $encoded = json_encode($value);
+
+            if (PropertyType::DOUBLE == $property->getType()
+                && !strpos($encoded, '.')
+            ) {
+                $encoded .= '.0';
+            }
+            $this->setJsopBody('^' . $path . ' : ' . $encoded);
         }
     }
 
@@ -1417,9 +1482,6 @@ class Client extends BaseTransport implements QueryTransport, PermissionInterfac
 
     /**
      * {@inheritDoc}
-     *
-     * @throws UnsupportedRepositoryOperationException if trying to
-     *      overwrite existing prefix to new uri, as jackrabbit can not do this
      */
     public function registerNamespace($prefix, $uri)
     {
@@ -1566,20 +1628,9 @@ class Client extends BaseTransport implements QueryTransport, PermissionInterfac
             '  <D:owner>' . $ownerInfo . '</D:owner>' .
             '</D:lockinfo>');
 
-        try {
-            $dom = $request->executeDom();
+        $dom = $request->executeDom();
 
-            return $this->generateLockFromDavResponse($dom, true, $absPath);
-        } catch (\PHPCR\RepositoryException $ex) {
-            // TODO: can we move that into the request handling code that determines the correct exception to throw?
-            // Check if it's a 412 error, otherwise re-throw the same exception
-            if (preg_match('/Response \(HTTP 412\):/', $ex->getMessage())) {
-                throw new \PHPCR\Lock\LockException("Unable to lock the non-lockable node '$absPath': " . $ex->getMessage(), 412);
-            }
-
-            // Any other exception will simply be rethrown
-            throw $ex;
-        }
+        return $this->generateLockFromDavResponse($dom, true, $absPath);
     }
 
     /**
@@ -1622,15 +1673,7 @@ class Client extends BaseTransport implements QueryTransport, PermissionInterfac
     }
 
     /**
-     * Internal method to fetch event data.
-     *
-     * @param $date
-     *
-     * @return array hashmap with 'data' containing unfiltered DOM of xml atom
-     *      feed of events, 'nextMillis' is the next timestamp if there are
-     *      more events to be found, false otherwise.
-     *
-     * @private
+     * {@inheritDoc}
      */
     public function fetchEventData($date)
     {
@@ -1664,7 +1707,7 @@ class Client extends BaseTransport implements QueryTransport, PermissionInterfac
     }
 
     /**
-     * @return mixed null or string
+     * {@inheritDoc}
      */
     public function getUserData()
     {
@@ -1697,6 +1740,9 @@ class Client extends BaseTransport implements QueryTransport, PermissionInterfac
         $request->execute();
     }
 
+    /**
+     * {@inheritDoc}
+     */
     public function deleteWorkspace($name)
     {
         // https://issues.apache.org/jira/browse/JCR-3144
@@ -1715,7 +1761,7 @@ class Client extends BaseTransport implements QueryTransport, PermissionInterfac
      */
     protected function buildRegisterNodeTypeRequest($cnd, $allowUpdate)
     {
-        $cnd = '<dcr:cnd>'.str_replace(array('<','>'), array('&lt;','&gt;'), $cnd).'</dcr:cnd>';
+        $cnd = '<dcr:cnd>'.str_replace(array('<', '>'), array('&lt;', '&gt;'), $cnd).'</dcr:cnd>';
         $cnd .= '<dcr:allowupdate>'.($allowUpdate ? 'true' : 'false').'</dcr:allowupdate>';
 
         return '<?xml version="1.0" encoding="UTF-8" standalone="no"?><D:propertyupdate xmlns:D="DAV:"><D:set><D:prop><dcr:nodetypes-cnd xmlns:dcr="http://www.day.com/jcr/webdav/1.0">'.$cnd.'</dcr:nodetypes-cnd></D:prop></D:set></D:propertyupdate>';
@@ -1852,7 +1898,7 @@ class Client extends BaseTransport implements QueryTransport, PermissionInterfac
      */
     protected function stripServerRootFromUri($uri)
     {
-        return substr($uri,strlen($this->workspaceUriRoot));
+        return substr($uri, strlen($this->workspaceUriRoot));
     }
 
     /**
@@ -2010,7 +2056,7 @@ class Client extends BaseTransport implements QueryTransport, PermissionInterfac
     protected function setJsopBody($value, $key = ":diff", $type = null)
     {
         if ($type) {
-             $this->jsopBody[$key] = array($value,$type);
+            $this->jsopBody[$key] = array($value,$type);
         } else {
             if (!isset($this->jsopBody[$key])) {
                 $this->jsopBody[$key] = "";
@@ -2086,15 +2132,15 @@ class Client extends BaseTransport implements QueryTransport, PermissionInterfac
         $data = '';
 
         $eol = "\r\n";
-        $data .= '--' . $mime_boundary . $eol ;
         if (is_array($value)) {
             if (is_array($value[0])) {
                 foreach ($value[0] as $v) {
-                    $data .= $this->getMimePart($name, array($v,$value[1]), $mime_boundary);
+                    $data .= $this->getMimePart($name, array($v, $value[1]), $mime_boundary);
                 }
 
                 return $data;
             }
+            $data .= '--' . $mime_boundary . $eol ;
 
             if (is_resource(($value[0]))) {
                 $data .= 'Content-Disposition: form-data; name="' . $name . '"; filename="' . $name . '"' . $eol;
@@ -2115,21 +2161,20 @@ class Client extends BaseTransport implements QueryTransport, PermissionInterfac
                 }
                 $data .= $eol;
             }
-
         } else {
             if (is_array($value)) {
                 foreach ($value as $v) {
-                    $data .= $this->getMimePart($name,$v,$mime_boundary);
+                    $data .= $this->getMimePart($name, $v, $mime_boundary);
                 }
 
                 return $data;
             }
+            $data .= '--' . $mime_boundary . $eol ;
             $data .= 'Content-Disposition: form-data; name="'.$name.'"'. $eol;
             $data .= 'Content-Type: text/plain; charset=UTF-8'. $eol;
             $data .= 'Content-Transfer-Encoding: 8bit'. $eol. $eol;
             //$data .= '--' . $mime_boundary . $eol;
             $data .= $value . $eol;
-
         }
 
         return $data;

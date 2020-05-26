@@ -21,6 +21,6 @@ class Factory extends \Jackalope\Factory
                 break;
         }
 
-        return parent::get($name,$params);
+        return parent::get($name, $params);
     }
 }
